@@ -1,0 +1,11 @@
+venv/
+.venv/
+.idea/
+*.iml
+__pycache__/
+*.pyc
+.env
+.ruff_cache/
+.pytest_cache/
+.coverage
+config/secrets.yaml
