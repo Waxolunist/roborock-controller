@@ -71,9 +71,11 @@ class Vacuum:
         return self.last_refresh is not None and self.clock() - self.last_refresh <= max_age
 
     def status(self) -> dict:
+        local = bool(self.device and self.device.is_local_connected)
         result = {
             "reachable": self.reachable,
-            "local_connection": bool(self.device and self.device.is_local_connected),
+            "local_connection": local,
+            "connection": ("local" if local else "cloud") if self.reachable else "unreachable",
             "last_update": _iso(self.last_refresh),
             "last_routine": None,
         }

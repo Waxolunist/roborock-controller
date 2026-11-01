@@ -71,7 +71,13 @@ async def test_refresh_without_a_device_is_unreachable(clock):
     assert not await vacuum.refresh()
 
     assert sample(vacuum.metrics, "roborock_up") == 0
-    assert vacuum.status() == {"reachable": False, "local_connection": False, "last_update": None, "last_routine": None}
+    assert vacuum.status() == {
+        "reachable": False,
+        "local_connection": False,
+        "connection": "unreachable",
+        "last_update": None,
+        "last_routine": None,
+    }
 
 
 async def test_fresh_follows_the_last_refresh(vacuum, clock):
@@ -95,6 +101,14 @@ async def test_status_lists_the_values(vacuum):
     assert status["dock_error"] == "ok"
     assert status["clean_area_m2"] == 12.5
     assert status["last_update"] == "2027-01-15T08:00:00+00:00"
+    assert status["connection"] == "local"
+
+
+async def test_connection_is_cloud_without_the_local_channel(vacuum, device):
+    device.is_local_connected = False
+    await vacuum.refresh()
+
+    assert vacuum.status()["connection"] == "cloud"
 
 
 async def test_routines_are_cached(vacuum, device, clock):
