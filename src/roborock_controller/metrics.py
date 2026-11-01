@@ -1,5 +1,7 @@
 from prometheus_client import CollectorRegistry, Counter, Gauge
 
+COMMANDS = ("routine", "stop", "dock")
+
 
 class Metrics:
     def __init__(self) -> None:
@@ -29,6 +31,9 @@ class Metrics:
         self.commands = Counter(
             "roborock_commands", "Commands sent to the vacuum", ["command", "result"], registry=self.registry
         )
+        for command in COMMANDS:
+            for result in ("success", "failure"):
+                self.commands.labels(command, result)
         self.cloud_auth_ok.set(1)
         self.up.set(0)
         self.local_connection.set(0)

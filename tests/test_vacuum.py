@@ -164,6 +164,14 @@ async def test_commands_without_a_device_fail_and_are_counted(clock):
     assert sample(vacuum.metrics, "roborock_commands_total", {"command": "stop", "result": "failure"}) == 1
 
 
+def test_command_counters_start_at_zero(clock):
+    metrics = Metrics()
+
+    for command in ("routine", "stop", "dock"):
+        for result in ("success", "failure"):
+            assert sample(metrics, "roborock_commands_total", {"command": command, "result": result}) == 0
+
+
 def test_cloud_rejection_is_a_metric(vacuum):
     assert sample(vacuum.metrics, "roborock_cloud_auth_ok") == 1
 
