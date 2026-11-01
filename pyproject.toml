@@ -1,0 +1,30 @@
+[tool.poetry]
+name = "roborock-controller"
+version = "0.1.0"
+description = "HTTP service and Prometheus metrics for a Roborock vacuum"
+authors = ["Christian Sterzl <christian.sterzl@gmail.com>"]
+readme = "README.md"
+packages = [
+    { include = "roborock_controller", from = "src" },
+]
+
+[tool.poetry.scripts]
+roborock-controller = "roborock_controller.__main__:main"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+
+[tool.poetry.dependencies]
+python = "^3.14"
+python-roborock = "^7.14.1"
+
+[tool.poetry.group.dev.dependencies]
+ruff = "^0.17.1"
+pytest = "^9.0.0"
+
+[tool.ruff]
+line-length = 120
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
