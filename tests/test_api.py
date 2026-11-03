@@ -1,5 +1,6 @@
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
+from roborock.data import RoborockInCleaning, RoborockStateCode
 
 from roborock_controller.api import api_app, metrics_app
 from roborock_controller.metrics import Metrics
@@ -14,7 +15,7 @@ def device():
 
 @pytest.fixture
 def vacuum(device):
-    vacuum = Vacuum(Metrics(), FakeClock())
+    vacuum = Vacuum(Metrics(), FakeClock(), settle_seconds=0)
     vacuum.attach(device)
     return vacuum
 
@@ -46,6 +47,8 @@ async def test_status(client, vacuum):
 
     assert body["state"] == "charging"
     assert body["battery"] == 98
+    assert body["can_pause"] is False
+    assert body["can_resume"] is False
 
 
 async def test_routines(client):
@@ -81,6 +84,34 @@ async def test_stop_and_dock(client, device):
     assert (await client.post("/dock")).status == 200
 
     assert device.v1_properties.command.sent == ["app_stop", "app_charge"]
+
+
+async def test_pause_and_resume(client, vacuum, device):
+    status = device.v1_properties.status
+    status.state = RoborockStateCode.segment_cleaning
+    await vacuum.refresh()
+    assert (await (await client.get("/status")).json())["can_pause"] is True
+
+    response = await client.post("/pause")
+    assert response.status == 200
+    assert (await response.json()) == {"sent": "pause"}
+
+    status.state = RoborockStateCode.paused
+    status.in_cleaning = RoborockInCleaning.segment_clean_not_complete
+    await vacuum.refresh()
+    assert (await client.post("/resume")).status == 200
+
+    assert device.v1_properties.command.sent == ["app_pause", "resume_segment_clean"]
+
+
+async def test_pause_while_docked_is_409(client, vacuum, device):
+    await vacuum.refresh()
+
+    response = await client.post("/pause")
+
+    assert response.status == 409
+    assert (await response.json()) == {"error": "pause is not possible while the vacuum is charging"}
+    assert device.v1_properties.command.sent == []
 
 
 async def test_a_vacuum_error_is_502(client, device):

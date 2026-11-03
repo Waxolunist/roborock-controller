@@ -1,6 +1,6 @@
 from prometheus_client import CollectorRegistry, Counter, Gauge
 
-COMMANDS = ("routine", "stop", "dock")
+COMMANDS = ("routine", "stop", "dock", "pause", "resume")
 
 
 class Metrics:

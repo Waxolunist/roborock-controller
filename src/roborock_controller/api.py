@@ -4,7 +4,7 @@ from aiohttp import web
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from roborock.exceptions import RoborockException
 
-from roborock_controller.vacuum import UnknownRoutine, Vacuum
+from roborock_controller.vacuum import NotPossible, UnknownRoutine, Vacuum
 
 VACUUM = web.AppKey("vacuum", Vacuum)
 
@@ -45,6 +45,16 @@ def api_app(vacuum: Vacuum, health_max_age: float) -> web.Application:
         await vacuum.dock()
         return web.json_response({"sent": "dock"})
 
+    @routes.post("/pause")
+    async def pause(request: web.Request) -> web.Response:
+        await vacuum.pause()
+        return web.json_response({"sent": "pause"})
+
+    @routes.post("/resume")
+    async def resume(request: web.Request) -> web.Response:
+        await vacuum.resume()
+        return web.json_response({"sent": "resume"})
+
     app.add_routes(routes)
     return app
 
@@ -65,5 +75,7 @@ def metrics_app(vacuum: Vacuum) -> web.Application:
 async def _roborock_errors(request: web.Request, handler):
     try:
         return await handler(request)
+    except NotPossible as e:
+        return web.json_response({"error": str(e)}, status=409)
     except RoborockException as e:
         return web.json_response({"error": str(e) or type(e).__name__}, status=502)

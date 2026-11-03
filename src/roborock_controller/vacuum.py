@@ -1,9 +1,11 @@
+import asyncio
 import logging
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from roborock import RoborockCommand
+from roborock.data import RoborockInCleaning, RoborockStateCode
 from roborock.exceptions import RoborockException
 
 from roborock_controller.metrics import Metrics
@@ -11,9 +13,41 @@ from roborock_controller.metrics import Metrics
 logger = logging.getLogger(__name__)
 
 ROUTINES_MAX_AGE = 300
+COMMAND_SETTLE_SECONDS = 2
+
+PAUSABLE = {
+    RoborockStateCode.starting,
+    RoborockStateCode.cleaning,
+    RoborockStateCode.returning_home,
+    RoborockStateCode.spot_cleaning,
+    RoborockStateCode.going_to_target,
+    RoborockStateCode.zoned_cleaning,
+    RoborockStateCode.segment_cleaning,
+    RoborockStateCode.going_to_wash_the_mop,
+    RoborockStateCode.robot_status_mopping,
+    RoborockStateCode.clean_mop_cleaning,
+    RoborockStateCode.clean_mop_mopping,
+    RoborockStateCode.segment_mopping,
+    RoborockStateCode.segment_clean_mop_cleaning,
+    RoborockStateCode.segment_clean_mop_mopping,
+    RoborockStateCode.zoned_mopping,
+    RoborockStateCode.zoned_clean_mop_cleaning,
+    RoborockStateCode.zoned_clean_mop_mopping,
+    RoborockStateCode.back_to_dock_washing_duster,
+}
+
+RESUME_COMMANDS = {
+    RoborockInCleaning.global_clean_not_complete: RoborockCommand.APP_START,
+    RoborockInCleaning.zone_clean_not_complete: RoborockCommand.RESUME_ZONED_CLEAN,
+    RoborockInCleaning.segment_clean_not_complete: RoborockCommand.RESUME_SEGMENT_CLEAN,
+}
 
 
 class UnknownRoutine(Exception):
+    pass
+
+
+class NotPossible(Exception):
     pass
 
 
@@ -30,9 +64,10 @@ class StartedRoutine:
 
 
 class Vacuum:
-    def __init__(self, metrics: Metrics, clock=time.time) -> None:
+    def __init__(self, metrics: Metrics, clock=time.time, settle_seconds: float = COMMAND_SETTLE_SECONDS) -> None:
         self.metrics = metrics
         self.clock = clock
+        self.settle_seconds = settle_seconds
         self.device = None
         self.reachable = False
         self.last_refresh: float | None = None
@@ -78,6 +113,8 @@ class Vacuum:
             "connection": ("local" if local else "cloud") if self.reachable else "unreachable",
             "last_update": _iso(self.last_refresh),
             "last_routine": None,
+            "can_pause": self._pause_command() is not None,
+            "can_resume": self._resume_command() is not None,
         }
         if self.last_routine is not None:
             result["last_routine"] = {
@@ -121,6 +158,44 @@ class Vacuum:
     async def dock(self) -> None:
         await self._run("dock", lambda p: p.command.send(RoborockCommand.APP_CHARGE))
 
+    async def pause(self) -> None:
+        await self.refresh()
+        await self._run_possible("pause", self._pause_command())
+
+    async def resume(self) -> None:
+        await self.refresh()
+        await self._run_possible("resume", self._resume_command())
+
+    def _known_status(self):
+        if self.device is None or not self.reachable:
+            return None
+        return self.device.v1_properties.status
+
+    def _pause_command(self) -> RoborockCommand | None:
+        status = self._known_status()
+        if status is None or status.state not in PAUSABLE:
+            return None
+        return RoborockCommand.APP_PAUSE
+
+    def _resume_command(self) -> RoborockCommand | None:
+        status = self._known_status()
+        if status is None or status.state != RoborockStateCode.paused:
+            return None
+        if status.in_cleaning in RESUME_COMMANDS:
+            return RESUME_COMMANDS[status.in_cleaning]
+        if status.in_returning:
+            return RoborockCommand.APP_CHARGE
+        return None
+
+    async def _run_possible(self, command: str, roborock_command: RoborockCommand | None) -> None:
+        if roborock_command is None:
+            raise NotPossible(f"{command} is not possible while the vacuum is {self._state_name()}")
+        await self._run(command, lambda p: p.command.send(roborock_command))
+
+    def _state_name(self) -> str:
+        status = self._known_status()
+        return "unreachable" if status is None else status.state_name or "unknown"
+
     def _properties(self):
         if self.device is None:
             raise RoborockException("Not connected to the vacuum")
@@ -138,6 +213,8 @@ class Vacuum:
             raise
         self.metrics.command(command, True)
         logger.info("Command %s sent", command)
+        await asyncio.sleep(self.settle_seconds)
+        await self.refresh()
 
 
 def _name(value) -> str | None:

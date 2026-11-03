@@ -1,6 +1,12 @@
 from types import SimpleNamespace
 
-from roborock.data import HomeDataScene, RoborockDockErrorCode, RoborockErrorCode, RoborockStateCode
+from roborock.data import (
+    HomeDataScene,
+    RoborockDockErrorCode,
+    RoborockErrorCode,
+    RoborockInCleaning,
+    RoborockStateCode,
+)
 from roborock.exceptions import RoborockException
 
 
@@ -14,6 +20,8 @@ class FakeStatus:
         self.square_meter_clean_area = 12.5
         self.clean_time = 900
         self.clean_percent = None
+        self.in_cleaning = RoborockInCleaning.complete
+        self.in_returning = 0
 
     @property
     def state_name(self) -> str:
