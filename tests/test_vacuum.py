@@ -1,9 +1,9 @@
 import pytest
-from roborock.data import RoborockDockErrorCode, RoborockErrorCode
+from roborock.data import RoborockDockErrorCode, RoborockErrorCode, RoborockInCleaning, RoborockStateCode
 from roborock.exceptions import RoborockException
 
-from roborock_controller.metrics import Metrics
-from roborock_controller.vacuum import UnknownRoutine, Vacuum
+from roborock_controller.metrics import COMMANDS, Metrics
+from roborock_controller.vacuum import NotPossible, UnknownRoutine, Vacuum
 from tests.fakes import FakeClock, FakeDevice
 
 
@@ -23,7 +23,7 @@ def device():
 
 @pytest.fixture
 def vacuum(device, clock):
-    vacuum = Vacuum(Metrics(), clock)
+    vacuum = Vacuum(Metrics(), clock, settle_seconds=0)
     vacuum.attach(device)
     return vacuum
 
@@ -47,7 +47,7 @@ async def test_refresh_records_the_status(vacuum, device):
 
 async def test_a_new_state_replaces_the_old_one(vacuum, device):
     await vacuum.refresh()
-    device.v1_properties.status.state = device.v1_properties.status.state.__class__.cleaning
+    device.v1_properties.status.state = RoborockStateCode.cleaning
 
     await vacuum.refresh()
 
@@ -77,6 +77,8 @@ async def test_refresh_without_a_device_is_unreachable(clock):
         "connection": "unreachable",
         "last_update": None,
         "last_routine": None,
+        "can_pause": False,
+        "can_resume": False,
     }
 
 
@@ -146,6 +148,96 @@ async def test_stop_and_dock_send_their_commands(vacuum, device):
     assert device.v1_properties.command.sent == ["app_stop", "app_charge"]
 
 
+async def test_a_command_refreshes_the_status(vacuum, device, clock):
+    await vacuum.refresh()
+    clock.now += 10
+
+    await vacuum.dock()
+
+    assert vacuum.last_refresh == clock.now
+
+
+@pytest.mark.parametrize(
+    "state",
+    [RoborockStateCode.cleaning, RoborockStateCode.segment_cleaning, RoborockStateCode.returning_home],
+)
+async def test_pause_while_working(vacuum, device, state):
+    device.v1_properties.status.state = state
+    await vacuum.refresh()
+
+    assert vacuum.status()["can_pause"] is True
+    await vacuum.pause()
+
+    assert device.v1_properties.command.sent == ["app_pause"]
+    assert sample(vacuum.metrics, "roborock_commands_total", {"command": "pause", "result": "success"}) == 1
+
+
+@pytest.mark.parametrize(
+    "state",
+    [RoborockStateCode.charging, RoborockStateCode.idle, RoborockStateCode.paused, RoborockStateCode.error],
+)
+async def test_pause_is_not_possible_while_not_working(vacuum, device, state):
+    device.v1_properties.status.state = state
+    await vacuum.refresh()
+
+    assert vacuum.status()["can_pause"] is False
+    with pytest.raises(NotPossible):
+        await vacuum.pause()
+
+    assert device.v1_properties.command.sent == []
+
+
+@pytest.mark.parametrize(
+    ("in_cleaning", "in_returning", "command"),
+    [
+        (RoborockInCleaning.global_clean_not_complete, 0, "app_start"),
+        (RoborockInCleaning.zone_clean_not_complete, 0, "resume_zoned_clean"),
+        (RoborockInCleaning.segment_clean_not_complete, 1, "resume_segment_clean"),
+        (RoborockInCleaning.complete, 1, "app_charge"),
+    ],
+)
+async def test_resume_continues_the_paused_task(vacuum, device, in_cleaning, in_returning, command):
+    status = device.v1_properties.status
+    status.state = RoborockStateCode.paused
+    status.in_cleaning = in_cleaning
+    status.in_returning = in_returning
+    await vacuum.refresh()
+
+    assert vacuum.status()["can_resume"] is True
+    await vacuum.resume()
+
+    assert device.v1_properties.command.sent == [command]
+
+
+async def test_resume_without_a_task_is_not_possible(vacuum, device):
+    device.v1_properties.status.state = RoborockStateCode.paused
+    await vacuum.refresh()
+
+    assert vacuum.status()["can_resume"] is False
+    with pytest.raises(NotPossible):
+        await vacuum.resume()
+
+
+async def test_resume_is_not_possible_while_cleaning(vacuum, device):
+    status = device.v1_properties.status
+    status.state = RoborockStateCode.cleaning
+    status.in_cleaning = RoborockInCleaning.global_clean_not_complete
+    await vacuum.refresh()
+
+    assert vacuum.status()["can_resume"] is False
+
+
+async def test_pause_and_resume_are_not_possible_while_unreachable(vacuum, device):
+    device.v1_properties.status.state = RoborockStateCode.cleaning
+    await vacuum.refresh()
+    device.v1_properties.status.fail = True
+    await vacuum.refresh()
+
+    assert vacuum.status()["can_pause"] is False
+    with pytest.raises(NotPossible, match="unreachable"):
+        await vacuum.pause()
+
+
 async def test_a_failed_command_is_counted(vacuum, device):
     device.v1_properties.command.fail = True
 
@@ -167,7 +259,7 @@ async def test_commands_without_a_device_fail_and_are_counted(clock):
 def test_command_counters_start_at_zero(clock):
     metrics = Metrics()
 
-    for command in ("routine", "stop", "dock"):
+    for command in COMMANDS:
         for result in ("success", "failure"):
             assert sample(metrics, "roborock_commands_total", {"command": command, "result": result}) == 0
 
